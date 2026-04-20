@@ -88,8 +88,16 @@ invalid_Error_P1:
 .data
     ;Player 2  
     msg4 db 'Guess the Colors Player 1 Chose: $'
-    msg5 13,10,("Number of Correct Color Placement: $")
-    msg6 13,10,("Number of Correct Color: $")
+    msgGuess db 13,10,('You Guessed: $')
+    chickenDinner db 13,10,('You Win!!$')
+    Top100 db 13,10,('Wrong Guess$')
+    resetMsg db 13,10,('Press any key to continue.....$')
+    attempts_Left db 13,10,('Attempts Left: $')
+    msgPlacement db 13,10,("Number of Correct Color Placement: $")
+    msgColor db 13,10,("Number of Correct Color: $")
+
+    ;Make a temporary storage for P! inputes
+    P1Temp db 5 dup('$')
 
     player2_Input label byte
         P2Len db 5
@@ -102,6 +110,10 @@ invalid_Error_P1:
 
 .code
 continue:
+    ;;Clear Scores
+    mov correct_Placement, 0
+    mov correct_Color, 0
+
     ;Clear the screen
     mov ah, 06h
     mov al, 00h
@@ -125,6 +137,13 @@ continue:
     mov ah, 0ah
     lea dx, player2_Input
     int 21h
+
+    ; After INT 21h / 0Ah for player2_Input
+    xor bh, bh
+    mov bl, P2Actual        ; get actual length (e.g. 4)
+    lea si, P2Store
+    add si, bx              ; point to byte after last char
+    mov byte ptr [si], '$'  ; overwrite the 0Dh with proper terminator
 
     mov ah, 09h 
     lea dx, newLine
@@ -155,37 +174,46 @@ next_p:
 
     mov correct_Placement, bl
 
-    xor cx,cx
+    xor cx, cx
+    mov cx, 4
+    lea si, P1Store
+    lea di, P1Temp
+
+copy_Loop:
+    mov al, [si]
+    mov [di], al
+    inc si 
+    inc di
+    loop copy_Loop
+    ;Nest Loop
     mov cx, 4
     lea di, P2Store
     mov bl, 0
 
 check_Correct_Color_Outer:
     push cx
-    mov al, [di]
+    mov al, [di] ;;Get the Input of P2
 
     mov cx, 4
-    lea si, P1Store
+    lea si, P1Temp ;;User Buffer
 
-    check_Correct_Color_Inner:
-        cmp al, [si]
-        je color_Found
-        inc si
-        loop check_Correct_Color_Inner
-        jmp color_NotFound
+check_Correct_Color_Inner:
+    cmp al, [si]
+    je color_Match_Found
+    inc si
+    loop check_Correct_Color_Inner
+    jmp next_Color_Char 
 
-color_NotFound:
-    pop cx
-    inc di
-    loop check_Correct_Color_Outer        
+color_Match_Found:
+    inc bl
+    mov byte ptr [si], 0
 
-color_Found:
-    inc correct_Color
+next_Color_Char:
     pop cx
     inc di
     loop check_Correct_Color_Outer
 
-mov bl, correct_Color
+mov correct_Color, bl
 jmp display_result
 
 invalid_Error_P2:
@@ -198,10 +226,90 @@ invalid_Error_P2:
 
     jmp continue
 
-
 display_result:
+    ;Clear the screen
+    mov ah, 06h
+    mov al, 00h
+    mov bh, 07h
+    mov cx, 0000h
+    mov dx, 184Fh
+    int 10h
+    ;move the cursor
+    mov ah, 02h
+    mov bh, 00h
+    mov dx, 0000h
+    int 10h
 
+      ; Display "You Guessed: "
+    mov ah, 09h
+    lea dx, msgGuess
+    int 21h
 
+    ; Print the actual characters guessed (P2Store)
+    lea dx, P2Store  
+    int 21h
+
+    ; Print the "Correct Color" label and number
+    mov ah, 09h       
+    lea dx, msgColor
+    int 21h
+    mov dl, correct_Color
+    add dl, 48         ; Convert number to ASCII
+    mov ah, 02h        ; Function to print a single character
+    int 21h
+
+    ; Print the "Placement" label and number
+    mov ah, 09h       
+    lea dx, msgPlacement
+    int 21h
+    mov dl, correct_Placement
+    add dl, 48
+    mov ah, 02h
+    int 21h
+
+    cmp correct_Placement, 4
+    je player2_Wins
+    jmp wrong_Guess
+
+player2_Wins:
+    mov ah, 09h
+    lea dx, chickenDinner
+    int 21h
+
+    jmp endMain
+
+wrong_Guess:
+    mov ah, 09h
+    lea dx, Top100
+    int 21h
+
+    dec attempts
+    ;End game after 10 tries
+    cmp attempts, 0
+    je reaatempt
+
+    ;Number of Attempts Left
+    mov ah, 09h
+    lea dx, attempts_Left
+    int 21h
+    ;Convert Tries to Actual Number
+    mov dl, attempts
+    add dl, 48
+    mov ah, 02h
+    int 21h
+    ;simple instructions
+    mov ah, 09h
+    lea dx, resetMsg
+    int 21h
+
+    ;Pause so that user can view results
+    mov ah, 01h
+    int 21h
+
+    jmp continue
+
+reaatempt:
+    jmp continue
 endMain:
     mov ah, 4ch
     int 21h
