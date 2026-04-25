@@ -1,317 +1,344 @@
 .model small
 .stack 100h
+
 .data
-    ;Player 1 message
-    msg1 db "Choose 4 Colors to Start the Game: $"
-    msg2 db "[Y] Yellow [R] Red [G] Green [B] Blue [W] White  [V] Violet$"
-    msg3 db "Invalid input must be Capital/4 Inputs$"
-        playerOneInput label byte
-            P1Len db 5
-            P1Actual db ?
-            P1Store db 5 dup("$")
-    newLine db 13,10,("$")
+    ; ── Screen clear / cursor helpers ─────────────────────────────────────
+    newLine     db 13,10,"$"
+
+    ; ── Player 1 ──────────────────────────────────────────────────────────
+    msg_p1_title  db "=== MASTERMIND: SET YOUR SECRET CODE ===",13,10,"$"
+    msg_p1_prompt db "Choose 4 Colors (e.g. RYGB): $"
+    msg_p1_legend db "[Y]ellow  [R]ed  [G]reen  [B]lue  [W]hite  [V]iolet",13,10,"$"
+    msg_invalid   db "  ! Invalid: use only Y R G B W V, exactly 4 chars.",13,10,"$"
+    msg_handoff   db "  >> Secret locked. Pass the device to Player 2. <<",13,10,"$"
+    msg_anykey    db "  Press any key to continue...$"
+
+    playerOneInput label byte
+        P1Len   db 6        ; buffer size (4 chars + CR + safety)
+        P1Actual db ?
+        P1Store  db 6 dup("$")
+
+    ; ── Player 2 ──────────────────────────────────────────────────────────
+    msg_p2_title    db "=== MASTERMIND: CRACK THE CODE ===",13,10,"$"
+    msg_p2_prompt   db "Your guess (4 colors): $"
+    msg_p2_legend   db "[Y]ellow  [R]ed  [G]reen  [B]lue  [W]hite  [V]iolet",13,10,"$"
+    msg_you_guessed db "  You guessed : $"
+    msg_placement   db "  Correct position : $"
+    msg_color       db "  Correct color    : $"
+    msg_win         db 13,10,"*** YOU WIN! Congratulations! ***",13,10,"$"
+    msg_lose        db 13,10,"*** GAME OVER! You ran out of attempts! ***",13,10,"$"
+    msg_wrong       db 13,10,"  Wrong! Keep trying.",13,10,"$"
+    msg_attempts    db "  Attempts left: $"
+
+    player2Input label byte
+        P2Len   db 6
+        P2Actual db ?
+        P2Store  db 6 dup("$")
+
+    ; ── Scratch / counters ────────────────────────────────────────────────
+    P1Temp          db 6 dup(0)   ; copy of P1Store used in color check
+    attempts        db 10
+    correct_Placement db 0
+    correct_Color     db 0
+
 .code
 
+; ══════════════════════════════════════════════════════════════════════════
+;  MACRO: clear screen and home cursor (INT 10h)
+; ══════════════════════════════════════════════════════════════════════════
+cls macro
+    mov ah, 06h
+    mov al, 00h
+    mov bh, 07h
+    xor cx, cx
+    mov dx, 184Fh
+    int 10h
+    mov ah, 02h
+    mov bh, 00h
+    xor dx, dx
+    int 10h
+endm
+
+; ══════════════════════════════════════════════════════════════════════════
+;  MACRO: print $ string at DS:DX
+; ══════════════════════════════════════════════════════════════════════════
+print macro msg_label
+    mov ah, 09h
+    lea dx, msg_label
+    int 21h
+endm
+
+; ══════════════════════════════════════════════════════════════════════════
+;  Entry point
+; ══════════════════════════════════════════════════════════════════════════
     mov ax, @data
     mov ds, ax
-player_Input:
-    mov ah, 09h 
-    lea dx, msg1
-    int 21h
 
-    lea dx, newLine
-    int 21h
+; ──────────────────────────────────────────────────────────────────────────
+;  PHASE 1 – Player 1 enters secret code
+; ──────────────────────────────────────────────────────────────────────────
+player1_input:
+    cls
 
-    lea dx, msg2
-    int 21h
+    print msg_p1_title
+    print newLine
+    print msg_p1_legend
+    print newLine
+    print msg_p1_prompt
 
-    lea dx, newLine
-    int 21h
-
-    mov ah, 0ah
+    mov ah, 0Ah
     lea dx, playerOneInput
     int 21h
 
-    mov ah, 09h 
-    lea dx, newLine
-    int 21h
+    print newLine
 
-    ;check input lenght
+    ; ── Fix CR terminator left by INT 21h/0Ah ────────────────────────────
+    xor bh, bh
+    mov bl, P1Actual
+    lea si, P1Store
+    add si, bx
+    mov byte ptr [si], '$'
+
+    ; ── Validate length ───────────────────────────────────────────────────
     cmp P1Actual, 4
-    jne invalid_Error_P1
+    jne p1_invalid
 
-    ;Start Loop Prep
+    ; ── Validate each character ───────────────────────────────────────────
     xor cx, cx
-    mov cl, P1Actual
+    mov cl, 4
     lea si, P1Store
 
-value_check:
+p1_val_loop:
     mov al, [si]
-
-    cmp al, 'Y'
-    je is_Valid
-
-    cmp al, 'R' 
-     je is_Valid
-
-    cmp al, 'G'
-     je is_Valid
-
-    cmp al, 'B'
-     je is_Valid
-
-    cmp al, 'W'
-     je is_Valid
-
-    cmp al, 'V'
-     je is_Valid
-
-    jmp invalid_Error_P1
-
-
-is_Valid:
+    call is_valid_color     ; sets ZF if valid
+    jnz p1_invalid
     inc si
-    loop value_check
+    loop p1_val_loop
+    jmp p1_done
 
-    jmp continue
+p1_invalid:
+    print msg_invalid
+    print newLine
+    jmp player1_input
 
-invalid_Error_P1:
-    mov ah, 09h
-    lea dx, msg3
-    int 21h
+p1_done:
+    ; ── Handoff screen ────────────────────────────────────────────────────
+    cls
+    print msg_handoff
+    print newLine
+    print msg_anykey
 
-    lea dx, newLine
-    int 21h
+    mov ah, 00h
+    int 16h                 ; wait for keypress (no echo)
 
-    jmp player_Input
-
-.data
-    ;Player 2  
-    msg4 db 'Guess the Colors Player 1 Chose: $'
-    msgGuess db 13,10,('You Guessed: $')
-    chickenDinner db 13,10,('You Win!!$')
-    Top100 db 13,10,('Wrong Guess$')
-    resetMsg db 13,10,('Press any key to continue.....$')
-    attempts_Left db 13,10,('Attempts Left: $')
-    msgPlacement db 13,10,("Number of Correct Color Placement: $")
-    msgColor db 13,10,("Number of Correct Color: $")
-
-    ;Make a temporary storage for P! inputes
-    P1Temp db 5 dup('$')
-
-    player2_Input label byte
-        P2Len db 5
-        P2Actual db ?
-        P2Store db 5 dup("$")
-
-    attempts db 10
-    correct_Placement db 0
-    correct_Color db 0
-
-.code
-continue:
-    ;;Clear Scores
+; ──────────────────────────────────────────────────────────────────────────
+;  PHASE 2 – Player 2 guesses
+; ──────────────────────────────────────────────────────────────────────────
+player2_turn:
+    ; Reset per-turn scores
     mov correct_Placement, 0
     mov correct_Color, 0
 
-    ;Clear the screen
-    mov ah, 06h
-    mov al, 00h
-    mov bh, 07h
-    mov cx, 0000h
-    mov dx, 184Fh
-    int 10h
-    ;move the cursor
+    cls
+
+    print msg_p2_title
+    print newLine
+    print msg_p2_legend
+    print newLine
+
+    ; ── Show attempts remaining ───────────────────────────────────────────
+    print msg_attempts
+    mov dl, attempts
+    add dl, '0'
     mov ah, 02h
-    mov bh, 00h
-    mov dx, 0000h
-    int 10h
-
-    mov ah, 09h
-    lea dx, msg4
     int 21h
+    print newLine
+    print newLine
 
-    lea dx, newLine
+    ; ── Get guess ─────────────────────────────────────────────────────────
+    print msg_p2_prompt
+    mov ah, 0Ah
+    lea dx, player2Input
     int 21h
+    print newLine
 
-    mov ah, 0ah
-    lea dx, player2_Input
-    int 21h
-
-    ; After INT 21h / 0Ah for player2_Input
+    ; Fix CR terminator
     xor bh, bh
-    mov bl, P2Actual        ; get actual length (e.g. 4)
+    mov bl, P2Actual
     lea si, P2Store
-    add si, bx              ; point to byte after last char
-    mov byte ptr [si], '$'  ; overwrite the 0Dh with proper terminator
+    add si, bx
+    mov byte ptr [si], '$'
 
-    mov ah, 09h 
-    lea dx, newLine
-    int 21h
-
-    ;;check the lenght
+    ; Validate length
     cmp P2Actual, 4
-    jne invalid_Error_P2
+    jne p2_invalid
 
+    ; Validate each character
     xor cx, cx
+    mov cl, 4
+    lea si, P2Store
+
+p2_val_loop:
+    mov al, [si]
+    call is_valid_color
+    jnz p2_invalid
+    inc si
+    loop p2_val_loop
+    jmp check_placement
+
+p2_invalid:
+    print msg_invalid
+    print newLine
+    jmp player2_turn        ; re-prompt, don't consume an attempt
+
+; ──────────────────────────────────────────────────────────────────────────
+;  CHECK PLACEMENT  (exact position matches)
+; ──────────────────────────────────────────────────────────────────────────
+check_placement:
     mov cx, 4
     lea si, P1Store
     lea di, P2Store
     mov bl, 0
 
-check_Correct_Placement:
+cp_loop:
     mov al, [si]
     cmp al, [di]
-    jne next_p
-
+    jne cp_next
     inc bl
-
-
-next_p:
+cp_next:
     inc si
     inc di
-    loop check_Correct_Placement
-
+    loop cp_loop
     mov correct_Placement, bl
 
-    xor cx, cx
+; ──────────────────────────────────────────────────────────────────────────
+;  CHECK COLOR  (exists anywhere, deduplicated via temp copy)
+; ──────────────────────────────────────────────────────────────────────────
+    ; Copy P1Store → P1Temp
     mov cx, 4
     lea si, P1Store
     lea di, P1Temp
-
-copy_Loop:
+copy_loop:
     mov al, [si]
     mov [di], al
-    inc si 
+    inc si
     inc di
-    loop copy_Loop
-    ;Nest Loop
+    loop copy_loop
+
     mov cx, 4
     lea di, P2Store
     mov bl, 0
 
-check_Correct_Color_Outer:
+cc_outer:
     push cx
-    mov al, [di] ;;Get the Input of P2
+    mov al, [di]            ; current guess char
 
     mov cx, 4
-    lea si, P1Temp ;;User Buffer
+    lea si, P1Temp
 
-check_Correct_Color_Inner:
+cc_inner:
     cmp al, [si]
-    je color_Match_Found
+    je  cc_found
     inc si
-    loop check_Correct_Color_Inner
-    jmp next_Color_Char 
+    loop cc_inner
+    jmp cc_next_outer
 
-color_Match_Found:
+cc_found:
     inc bl
-    mov byte ptr [si], 0
+    mov byte ptr [si], 0    ; mark used so duplicates don't double-count
 
-next_Color_Char:
+cc_next_outer:
     pop cx
     inc di
-    loop check_Correct_Color_Outer
+    loop cc_outer
+    mov correct_Color, bl
 
-mov correct_Color, bl
-jmp display_result
-
-invalid_Error_P2:
-    mov ah, 09h
-    lea dx, msg3
-    int 21h
-
-    lea dx, newLine
-    int 21h
-
-    jmp continue
-
+; ──────────────────────────────────────────────────────────────────────────
+;  DISPLAY RESULT
+; ──────────────────────────────────────────────────────────────────────────
 display_result:
-    ;Clear the screen
-    mov ah, 06h
-    mov al, 00h
-    mov bh, 07h
-    mov cx, 0000h
-    mov dx, 184Fh
-    int 10h
-    ;move the cursor
-    mov ah, 02h
-    mov bh, 00h
-    mov dx, 0000h
-    int 10h
+    cls
 
-      ; Display "You Guessed: "
+    ; "You guessed: XXXX"
+    print msg_you_guessed
     mov ah, 09h
-    lea dx, msgGuess
+    lea dx, P2Store
     int 21h
+    print newLine
 
-    ; Print the actual characters guessed (P2Store)
-    lea dx, P2Store  
-    int 21h
-
-    ; Print the "Correct Color" label and number
-    mov ah, 09h       
-    lea dx, msgColor
-    int 21h
-    mov dl, correct_Color
-    add dl, 48         ; Convert number to ASCII
-    mov ah, 02h        ; Function to print a single character
-    int 21h
-
-    ; Print the "Placement" label and number
-    mov ah, 09h       
-    lea dx, msgPlacement
-    int 21h
+    ; "Correct position: N"
+    print msg_placement
     mov dl, correct_Placement
-    add dl, 48
+    add dl, '0'
     mov ah, 02h
     int 21h
+    print newLine
 
-    cmp correct_Placement, 4
-    je player2_Wins
-    jmp wrong_Guess
-
-player2_Wins:
-    mov ah, 09h
-    lea dx, chickenDinner
+    ; "Correct color: N"
+    print msg_color
+    mov dl, correct_Color
+    add dl, '0'
+    mov ah, 02h
     int 21h
+    print newLine
 
+    ; ── Win check ─────────────────────────────────────────────────────────
+    cmp correct_Placement, 4
+    je  player2_wins
+
+    ; ── Consume attempt ───────────────────────────────────────────────────
+    dec attempts
+    cmp attempts, 0
+    je  game_over
+
+    print msg_wrong
+    print msg_anykey
+    mov ah, 00h
+    int 16h
+    jmp player2_turn
+
+player2_wins:
+    print msg_win
     jmp endMain
 
-wrong_Guess:
-    mov ah, 09h
-    lea dx, Top100
-    int 21h
+game_over:
+    print msg_lose
+    jmp endMain
 
-    dec attempts
-    ;End game after 10 tries
-    cmp attempts, 0
-    je reaatempt
+; ──────────────────────────────────────────────────────────────────────────
+;  SUBROUTINE: is_valid_color
+;    Input : AL = character to test
+;    Output: ZF set (jz = valid), ZF clear (jnz = invalid)
+; ──────────────────────────────────────────────────────────────────────────
+is_valid_color proc near
+    cmp al, 'Y'
+    je  ivc_ok
+    cmp al, 'R'
+    je  ivc_ok
+    cmp al, 'G'
+    je  ivc_ok
+    cmp al, 'B'
+    je  ivc_ok
+    cmp al, 'W'
+    je  ivc_ok
+    cmp al, 'V'
+    je  ivc_ok
+    ; Invalid – set flags so jnz fires
+    or  al, al              ; clears ZF (AL cannot be 0 here)
+    ret
+ivc_ok:
+    ; Valid – set ZF
+    xor al, al              ; sets ZF
+    ret
+is_valid_color endp
 
-    ;Number of Attempts Left
-    mov ah, 09h
-    lea dx, attempts_Left
-    int 21h
-    ;Convert Tries to Actual Number
-    mov dl, attempts
-    add dl, 48
-    mov ah, 02h
-    int 21h
-    ;simple instructions
-    mov ah, 09h
-    lea dx, resetMsg
-    int 21h
-
-    ;Pause so that user can view results
-    mov ah, 01h
-    int 21h
-
-    jmp continue
-
-reaatempt:
-    jmp continue
+; ──────────────────────────────────────────────────────────────────────────
 endMain:
-    mov ah, 4ch
+    print msg_anykey
+    mov ah, 00h
+    int 16h
+
+    mov ah, 4Ch
     int 21h
 
 end
